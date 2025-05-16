@@ -3,151 +3,152 @@ import base64
 from flask import Flask, render_template, request, jsonify
 import openai
 from dotenv import load_dotenv
-import json
+from flask_cors import CORS
 
-
-
-from flask_cors import CORS  # Add this at the top with other imports
 app = Flask(__name__)
-CORS(app)  # Add this right after creating your Flask app
+CORS(app)
 
 app.config["UPLOAD_FOLDER"] = "static/uploads"
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
-
-# Get the API key from the environment variable
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     raise ValueError("OPENAI_API_KEY environment variable not set")
 
 client = openai.OpenAI(api_key=api_key)
 
-# Function to encode image to base64
+# Sculpture state management
+current_sculpture = {
+    "name": "",
+    "description": "",
+    "elements": {
+        "tip": "",
+        "upper_body": "",
+        "middle_body": "",
+        "lower_body": "",
+        "base": "",
+        "decorations": []
+    },
+    "textures": ["clear", "frosty"],
+    "modifications": []
+}
+
+conversation_history = [
+    {
+        "user": "",
+        "ai": (
+            "Welcome to **Ice Sculptures Rendering**! I'm your visual artist assistant, "
+            "specializing in designing and modifying realistic ice sculptures. 🧊\n\n"
+            "- You can describe a sculpture you'd like me to create\n"
+            "- Or upload an image you'd like me to turn into an ice sculpture\n\n"
+            "I'll remember details across our conversation and stay completely in the ice art context!"
+        )
+    }
+]
+
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
-
-# Global conversation history with a welcome message
-conversation_history = [{"user": "", "ai": "Welcome to Ice Butcher! How can I assist you today? you can gernate ice sckupers form that feel free to make 🧊"}]
-
-
 @app.route("/", methods=["GET"])
 def index():
-    # Render the template and pass the initial conversation history
     return render_template("index.html", conversation_history=conversation_history)
 
-
-
-
-conversation_history = []
 @app.route("/chatbot", methods=["POST"])
 def chatbot():
-    
-    # Define a list of keywords that should trigger DALL·E image generation
-    image_generation_keywords = ["generate", "create", "make", "design", "draw", "build", "craft" , "imagine",  "sketch", "construct","sculpt" ]
+    global current_sculpture, conversation_history
 
-    user_input = request.form.get("user_input", "").strip().lower()
+    user_input = request.form.get("user_input", "").strip()
     uploaded_file = request.files.get("image")
 
     try:
-
-        # Create the custom prompt with matched results
-        custom_prompt = f"""
-        You are an AI assistant for an ice sculpture company named "Ice Butcher", you can only create images from users prompts and input images.
-
-
-        Message to show along with the images response:
-        this is the Rendering of what we have done for other clients, we can also customize it to your event theme and logo, So! you want like this? (change your tone accordingly)
-
-         - Users can only create ice sculptures in this chatbot if their message starts with one of the following words: 
-        "generate", "create", "make", "design", "draw", "build", "craft", "imagine", "sketch", "construct", "sculpt".
-        """
-        conversation_text = "\n".join([f"User: {entry['user']}\nAI: {entry['ai']}" for entry in conversation_history])
-        full_prompt = f"{custom_prompt}\n{conversation_text}\nUser: {user_input}\nAI:"
-
-
-        # If there's an uploaded file (image)';mn
         if uploaded_file:
-            image_path = "uploaded_image.jpg"
+            image_path = os.path.join(app.config["UPLOAD_FOLDER"], "uploaded_image.jpg")
             uploaded_file.save(image_path)
-            
-            instruction_text = """
-            Describe the geometrical features of this image for an ice Sculpture.
-            The ice should have a natural texture with light refraction.
-            """
-
             base64_image = encode_image(image_path)
-            completion = client.chat.completions.create(
+
+            image_analysis = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": instruction_text},
+                        {
+                            "type": "text",
+                            "text": (
+                                "You are an expert ice sculptor.\n"
+                                "Analyze this image to help convert it into a realistic ice sculpture. "
+                                "Identify:\n"
+                                "1. Main sculpture-worthy components\n"
+                                "2. Best parts for ice carving\n"
+                                "3. Modifications or engravings that would enhance it\n"
+                                "4. Ice-specific considerations for weight, balance, fragility"
+                            )
+                        },
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
                     ]
                 }]
-            )
+            ).choices[0].message.content
 
-            gpt_response = completion.choices[0].message.content
+            conversation_history.append({
+                "user": "[Uploaded image]",
+                "ai": image_analysis
+            })
 
-            dalle_prompt = f"""
-            Create an image of an ice Sculpture.
-            The Sculpture should be a carving on a thick ice block.
-            The ice should have a natural texture with light refraction.
-            {gpt_response}
-            
-            The ice Sculpture should appear carved from genuine translucent ice, with a natural, slightly imperfect finish.
-            Place the Sculpture on a wooden table with a black background for contrast.
-            Avoid intricate patterns, sharp edges, or overly fine details, it should be very basic as possible.
-            Focus on natural ice textures, slight frost buildup, and subtle light refraction.
-            The image should resemble a high-quality photograph taken with a professional DSLR camera, capturing the essence of an authentic, handcrafted ice Sculpture.
-            The final image will only include the ice sculpture .
-            
-            IMPORTANT: 
-            - Only provide realistic designs that are possible to make with real ice.
-            - Avoid any tiny or overly intricate designs that are not feasible for actual ice carving.
-            
-            """
+            return jsonify({"response": image_analysis})
 
-        
-        # If the user input contains "generate", pass the prompt to DALL·E
-        elif any(user_input.startswith(keyword) for keyword in image_generation_keywords):
-            dalle_prompt = f"""
-            Create images of ice Sculpture.
-            Every image should emphasize natural ice .
-            Avoid adding too much details, keep it as simple as possible.
-            
-            {user_input}
-            IMPORTANT: - The Ice Sculpture primarily focuses on detailed Sculpture.
-            Only provide realistic designs that are possible to make with real ice.
-            The ice Sculpture should appear carved from genuine translucent ice, with a natural, slightly imperfect finish.
-            Place the Sculpture on a wooden table with a black background for contrast.
-            Avoid intricate patterns, sharp edges, or overly fine details, it should be very basic as possible.
-            Focus on natural ice textures, slight frost buildup, and subtle light refraction.
-            The image should resemble a high-quality photograph taken with a professional DSLR camera, capturing the essence of an authentic, handcrafted ice Sculpture.
-            The final image will only include the ice engraved sculpture , no human should be present in the image.
-            Do not include any tiny or overly intricate designs that are not feasible with real ice.
+        # Create system prompt
+        system_prompt = f"""
+        You are Ice Sculptures Rendering — a visual artist assistant who specializes in generating and modifying
+        photo-realistic ice sculptures. Stay 100% in-character and always follow these instructions:
 
-      
-            """
-        
-        # Handle other chatbot input
-        else:
-            prompt_with_custom = f"{full_prompt}\n{user_input}"
-            completion = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt_with_custom}]
-            )
-            gpt_response = completion.choices[0].message.content
-            conversation_history.append({"user": user_input, "ai": gpt_response})
-            return jsonify({"response": gpt_response})
-        
+        1. All sculptures must look like they’re made of ice — clear, frosty, or textured.
+        2. Respect the current sculpture's memory. Never forget previous changes or details.
+        3. Follow modifications like adding names, symbols, or crowns precisely.
+        4. Only describe components like: tip, upper body, middle body, lower body, base, decorations.
+        5. Confirm and summarize user changes before finalizing the sculpture.
+        6. Never suggest impossible ice structures — realism is key.
+        7. Respond in a friendly, helpful artist tone and never break ice-themed character.
 
+        Current Sculpture State:
+        - Name: {current_sculpture['name']}
+        - Description: {current_sculpture['description']}
+        - Elements: {current_sculpture['elements']}
+        - Textures: {', '.join(current_sculpture['textures'])}
+        - Modifications: {current_sculpture['modifications']}
+        """
 
-        # Generate image with DALL-E 3
-        response = client.images.generate(
+        # Get GPT-4o response
+        text_response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input}
+            ]
+        ).choices[0].message.content
+
+        conversation_history.append({"user": user_input, "ai": text_response})
+
+        # Generate ice sculpture image using DALL·E 3
+        dalle_prompt = f"""
+        Create a photorealistic image of an ice sculpture based on the following:
+
+        - Theme or Name: {current_sculpture['name'] or 'Abstract Ice Sculpture'}
+        - Description: {current_sculpture['description'] or user_input}
+        - Style: Expert-level ice carving
+        - Materials: Made entirely of clear and frosty ice
+        - Texture: Realistic ice surface and reflections
+        - Lighting: Studio lighting to enhance refraction
+        - Background: Plain or softly lit to emphasize the sculpture
+        - Components: Tip, upper body, middle body, lower body, base, and any decorations
+
+        Notes:
+        - The sculpture must appear physically possible to carve from real ice.
+        - Avoid cartoonish or impossible forms.
+        """
+
+        image_response = client.images.generate(
             model="dall-e-3",
             prompt=dalle_prompt,
             size="1024x1024",
@@ -155,8 +156,11 @@ def chatbot():
             n=1,
         )
 
-        generated_image_url = response.data[0].url
-        return jsonify({"response": "Here is your ice Sculpture:\n", "image_url": generated_image_url})
+        return jsonify({
+            "response": text_response,
+            "image_url": image_response.data[0].url,
+            "sculpture_state": current_sculpture
+        })
 
     except Exception as e:
         return jsonify({"response": f"Error: {str(e)}"})
